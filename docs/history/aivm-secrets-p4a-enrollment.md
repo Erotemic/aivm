@@ -2,7 +2,7 @@
 
 Status: **historical P4a increment**, 2026-10-12. For the current
 single-root schema-2 authority and CLI paths see
-[aivm-secrets-garrett-ca-lifecycle.md](aivm-secrets-garrett-ca-lifecycle.md).
+[aivm-secrets-garrett-ca-lifecycle.md](../architecture/aivm-secrets-garrett-ca-lifecycle.md).
 Older flat-file examples and lifetime statements below describe the original
 prototype and are **not** current operator instructions. The former
 `identity/registry_model.py` facade has been deleted; the canonical pure

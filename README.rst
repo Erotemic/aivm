@@ -334,7 +334,7 @@ guard through ``aivm vm update`` or ``aivm vm fdguard --action install``.
 Legacy per-user config stores are **not** silently migrated to the 0.6
 machine/profile model. Use ``aivm config migrate plan`` before any explicit
 ``apply``, and consult the `migration plan and recovery reference
-<docs/planning/released-store-migration-plan.md>`_. VM removal uses a
+<docs/reference/released-store-migration-plan.md>`_. VM removal uses a
 recoverable cleanup journal; credential ownership must be resolved before
 removing a VM.
 

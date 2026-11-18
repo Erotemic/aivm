@@ -1,7 +1,7 @@
 # Shared-machine implementation roadmap
 
 This roadmap implements the architecture in
-[`shared-machine-architecture.md`](shared-machine-architecture.md). It favors a
+[`shared-machine-architecture.md`](../architecture/shared-machine-architecture.md). It favors a
 sequence of mergeable changes that keep the released single-user workflow
 working while eliminating the current scope ambiguity.
 
@@ -153,7 +153,7 @@ leaving normal config resolution on the legacy per-user store:
 
 The exact layout, permissions, replacement sequence, and lock-order rule are
 recorded in
-[`machine-store-filesystem-contract.md`](machine-store-filesystem-contract.md).
+[`machine-store-filesystem-contract.md`](../reference/machine-store-filesystem-contract.md).
 
 ### Stage 3/4 execution checklist: activate scopes and adopt the creator
 
@@ -199,7 +199,7 @@ before automatic enrollment of a second user.
 - [x] Run the complete non-e2e suite as a non-root user.
 
 The exact logical split and compatibility rules are recorded in
-[`machine-profile-store-contract.md`](machine-profile-store-contract.md).
+[`machine-profile-store-contract.md`](../reference/machine-profile-store-contract.md).
 The next tranche is work package 3: the restricted guest bootstrap helper and
 idempotent principal enrollment. Until that lands, a later host user sees an
 actionable not-enrolled error rather than a shadow machine definition.
@@ -234,7 +234,7 @@ The fifth 0.6.0 tranche implements work package 3 while leaving automatic
 - [x] Run the complete non-e2e suite as a non-root user.
 
 The exact protocol and compatibility boundary are recorded in
-[`guest-enrollment-control.md`](guest-enrollment-control.md).
+[`guest-enrollment-control.md`](../architecture/guest-enrollment-control.md).
 
 ### Stage 6 execution checklist: natural create-or-join initialization
 
@@ -267,7 +267,7 @@ machine discovery to the restricted enrollment service:
 - [x] Run the complete non-e2e suite as a non-root user.
 
 The decision table and recovery behavior are recorded in
-[`config-init-create-or-join.md`](config-init-create-or-join.md).
+[`config-init-create-or-join.md`](../reference/config-init-create-or-join.md).
 
 ### Stage 7 execution checklist: global attachment ownership and replay
 
@@ -300,7 +300,7 @@ while preserving legacy single-user attachment semantics:
 - [x] Run the complete non-e2e suite as a non-root user.
 
 The exact ownership, visibility, override, and replay rules are recorded in
-[`global-attachment-ownership.md`](global-attachment-ownership.md).
+[`global-attachment-ownership.md`](../architecture/global-attachment-ownership.md).
 
 ### Stage 8 execution checklist: principal-scoped credentials
 
@@ -334,7 +334,7 @@ without moving legacy credential key material:
 - [x] Run the complete non-e2e suite as a non-root user.
 
 The ownership and operational contract is recorded in
-[`principal-scoped-credentials.md`](principal-scoped-credentials.md).
+[`principal-scoped-credentials.md`](../architecture/principal-scoped-credentials.md).
 
 ### Stage 9 execution checklist: released-store migration planning
 
@@ -367,7 +367,7 @@ rollback state:
 - [x] Run the complete non-e2e suite as a non-root user.
 
 The report contract and apply boundary are recorded in
-[`released-store-migration-plan.md`](released-store-migration-plan.md).
+[`released-store-migration-plan.md`](../reference/released-store-migration-plan.md).
 
 ### Stage 10 execution checklist: released-store migration apply
 
@@ -429,7 +429,7 @@ host authorization system:
 - [x] Run the complete non-e2e suite as a non-root user.
 
 The lifecycle, trust, and removal rules are recorded in
-[`operational-lifecycle.md`](operational-lifecycle.md). The implementation
+[`operational-lifecycle.md`](../reference/operational-lifecycle.md). The implementation
 roadmap is complete; the remaining work is real-system migration/shared-user
 validation and release review.
 
@@ -439,7 +439,7 @@ validation and release review.
 Pre-0.6 migration and runtime compatibility is isolated under
 `aivm.legacy.pre_0_6_0`; mixed canonical surfaces are explicitly marked. The
 removal boundary and retirement procedure are recorded in
-[`pre-0.6-compatibility-boundary.md`](pre-0.6-compatibility-boundary.md).
+[`pre-0.6-compatibility-boundary.md`](../reference/pre-0.6-compatibility-boundary.md).
 
 ## Work package 1: Separate models without moving storage
 

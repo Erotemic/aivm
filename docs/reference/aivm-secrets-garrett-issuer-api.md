@@ -67,7 +67,7 @@ longer parses all fail the test.
   `renew-client` and `rotate-client-key` meet criterion 2 only within the
   limits of the decided host key-custody rule. That rule is defined in one
   place, "Host key custody rule" in the
-  [rollback and clone policy](aivm-secrets-garrett-rollback-clone-policy.md).
+  [rollback and clone policy](../planning/aivm-secrets-garrett-rollback-clone-policy.md).
   Until it exists, every renewal after a key rotation re-certifies the
   rotated-away key (case 3 of that policy).
 
@@ -273,7 +273,7 @@ Requirements for such a design:
    for. A peer UID may use automation-safe verbs only on subjects recorded
    for that UID. The service reads neither the machine store nor libvirt, so
    the process boundary in the
-   [rollback and clone policy](aivm-secrets-garrett-rollback-clone-policy.md)
+   [rollback and clone policy](../planning/aivm-secrets-garrett-rollback-clone-policy.md)
    holds unchanged: AIVM still derives the subject from host facts and
    passes it as a value, and the service checks it against its own record,
    never against AIVM's. Operator-only verbs need membership of a separate

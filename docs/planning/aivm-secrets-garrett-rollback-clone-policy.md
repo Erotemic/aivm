@@ -8,7 +8,7 @@ could detect it. Every statement about current behavior was checked against
 the code at this writing. Items are marked **implemented** (true of the code
 now), **decided** (policy settled, implementation pending) or **option**
 (considered, not scheduled). The open obligations are ROLLBACK-01 and
-CLONE-01 in [the assumption ledger](aivm-secrets-assumptions.json).
+CLONE-01 in [the assumption ledger](../reference/aivm-secrets-assumptions.json).
 
 ## The plain limit
 
@@ -58,7 +58,7 @@ Facts the cases below depend on (all **implemented**):
   whose enrollment was revoked after the copy was taken gets a fresh
   certificate at its next renewal. The decided bulk renewal
   (`identity_renew --all` in the
-  [operations policy](aivm-secrets-garrett-operations-policy.md)) counts an
+  [operations policy](../reference/aivm-secrets-garrett-operations-policy.md)) counts an
   expired active row as due, so it would renew that VM without being asked
   to. A restore can also re-enable a retired issuer key, re-select a
   superseded CA whose private key is still on disk, or restore a locally
@@ -109,7 +109,7 @@ Facts the cases below depend on (all **implemented**):
 
 **Decided** (implementation pending). This is the one definition that cases
 3, 5, 6 and 7, CLONE-01, the [vTPM policy](aivm-secrets-garrett-vtpm-policy.md)
-and the [issuer API policy](aivm-secrets-garrett-issuer-api.md) rely on.
+and the [issuer API policy](../reference/aivm-secrets-garrett-issuer-api.md) rely on.
 
 - **What a row records.** Each registry row records `key_sha256`, the
   fingerprint of the key its current certificate certifies (lowercase hex
@@ -304,7 +304,7 @@ A disk is copied by hand and defined as a domain.
 - *Another host:* that host's authority has its own CA. A certificate issued
   by this host's CA is not trusted there. Copying the authority directory
   along with the disk is a fork, which the
-  [operations policy](aivm-secrets-garrett-operations-policy.md) treats as out
+  [operations policy](../reference/aivm-secrets-garrett-operations-policy.md) treats as out
   of scope.
 
 ### 7. Copied vTPM state
@@ -470,7 +470,7 @@ holds.
   before it was cached. The witness learns operation counts and timing.
 - *Side:* `aivm_secrets`. **Option.** This is also the starting point for the
   cross-host fork detection that the
-  [operations policy](aivm-secrets-garrett-operations-policy.md) defers.
+  [operations policy](../reference/aivm-secrets-garrett-operations-policy.md) defers.
 
 ## Division of responsibility across the process boundary
 

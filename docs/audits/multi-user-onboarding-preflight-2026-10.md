@@ -3,8 +3,8 @@
 > **Status:** operational review and backlog, not blanket authorization for
 > every proposed improvement. The request-first planner is a **candidate**;
 > a privileged `aivmd` systemd broker is **exploratory and explicitly not
-> approved**. See [delegated-operations proposal](privileged-operations-broker-proposal-2026-10.md)
-> and [sbx/OpenShell survey](related-work-sbx-openshell-2026-10.md).
+> approved**. See [delegated-operations proposal](../planning/privileged-operations-broker-proposal-2026-10.md)
+> and [sbx/OpenShell survey](../related-work/related-work-sbx-openshell-2026-10.md).
 
 ## Scope and evidence
 
@@ -242,9 +242,9 @@ unrestricted Cartesian product of all state flags.
 The broker paragraph below is **a possible long-term design**, not approval
 or an instruction to implement `aivmd`. It is also separate from the
 request-first planner, which can improve current behavior without installing
-any service. The proposed broker's authorization and review criteria are in the [delegated-operations proposal](privileged-operations-broker-proposal-2026-10.md);
+any service. The proposed broker's authorization and review criteria are in the [delegated-operations proposal](../planning/privileged-operations-broker-proposal-2026-10.md);
 comparison to current external runtimes is in the
-[sbx/OpenShell survey](related-work-sbx-openshell-2026-10.md).
+[sbx/OpenShell survey](../related-work/related-work-sbx-openshell-2026-10.md).
 
 The `libvirt` group is effectively a host-administrator-level trust grant.
 It is an acceptable explicit assumption for trusted coworkers, not a least-

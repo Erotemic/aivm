@@ -2,17 +2,17 @@
 
 Status: **M1 and selected M2/M4 Python modules implemented (2026-10-12).**
 The `primitives` package and self-contained *pure* Garrett protocol now exist;
-see [implementation record](aivm-secrets-garrett-modular-refactor.md). This
+see [implementation record](../history/aivm-secrets-garrett-modular-refactor.md). This
 remains the target design for unfinished M3, M5 and M6. No Rust crate,
 extracted Lean theorem, or end-to-end proof is delivered. Existing protocol
 bytes and CLI behavior remain the compatibility contract.
 
-Related plans: [overall design](aivm-secrets-design.md),
-[dual implementations](aivm-secrets-parallel-implementations.md),
+Related plans: [overall design](../architecture/aivm-secrets-design.md),
+[dual implementations](../architecture/aivm-secrets-parallel-implementations.md),
 [formal assurance](aivm-secrets-formal-assurance.md),
-[kernel specification](aivm-secrets-kernel-spec.md),
-[Garrett identity](aivm-secrets-garrett-identity.md), and
-[managed-VM P4a](aivm-secrets-p4a-managed-vm.md).
+[kernel specification](../reference/aivm-secrets-kernel-spec.md),
+[Garrett identity](../architecture/aivm-secrets-garrett-identity.md), and
+[managed-VM P4a](../history/aivm-secrets-p4a-managed-vm.md).
 
 ## 1. Decision: composable units, not premature distributions
 

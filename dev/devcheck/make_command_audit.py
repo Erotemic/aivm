@@ -9,7 +9,7 @@ SITES = Path(
     '/tmp/claude-1000/-home-joncrall-code-aivm/'
     '96cc7661-f780-4162-9e18-e885857992d0/scratchpad/sites.json'
 )
-OUT = Path('/home/joncrall/code/aivm/docs/planning/command-approval-audit.md')
+OUT = Path(__file__).resolve().parents[2] / 'docs/audits/command-approval-audit.md'
 
 READ_VERBS = (
     'dominfo',

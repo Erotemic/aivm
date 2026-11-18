@@ -5,8 +5,8 @@ provider/mTLS integration tested, no live OAuth provider or libvirt VM tested.**
 This is the Python P4b/P4c-local implementation. It is not the full remote,
 stateless, hardware-bound system described in [Garrett, *Securing agentic
 identity*](https://codon.org.uk/~mjg59/blog/p/securing-agentic-identity/).
-See [Garrett identity](aivm-secrets-garrett-identity.md) and the
-[parallel Python/Rust agreement](aivm-secrets-parallel-implementations.md).
+See [Garrett identity](../architecture/aivm-secrets-garrett-identity.md) and the
+[parallel Python/Rust agreement](../architecture/aivm-secrets-parallel-implementations.md).
 
 ## End-to-end local architecture
 

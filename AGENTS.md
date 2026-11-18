@@ -151,7 +151,7 @@ copy the shown commands and perform the equivalent work without AIVM.
   audited or formally verified. Future Rust/Lean work and hardware
   identity are separate, optional assurance efforts; local broker use
   needs neither TPM nor a second VM/container.
-- **Read first:** `docs/planning/aivm-secrets-repository-boundary.md`
+- **Read first:** `docs/reference/aivm-secrets-repository-boundary.md`
   for the binding decision, current coupling inventory, extraction gates
   and security review requirements. The source-tree cutover to the sibling
   checkout is complete; this does not authorize broader AIVM integration.

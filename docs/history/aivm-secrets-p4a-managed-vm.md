@@ -286,7 +286,7 @@ and provider credential acquisition without exposing ordinary host tokens.
 ## Planned module extraction (no change to managed-VM authority)
 
 The next design-only increment introduces
-[primitive contracts and a pure Garrett protocol model](aivm-secrets-modular-proof-architecture.md).
+[primitive contracts and a pure Garrett protocol model](../planning/aivm-secrets-modular-proof-architecture.md).
 Keep the managed-VM source of authority here: AIVM's machine store, active
 principal, libvirt UUID and pinned bootstrap SSH. These are external facts
 provided to the `identity/garrett/vm.py` reference; a reusable primitive cannot

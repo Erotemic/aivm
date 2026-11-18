@@ -156,7 +156,7 @@ operation-level authorization policy.
 
 Key renewal under a still-trusted CA also does not solve CA expiry or CA key
 compromise; that is the separate, explicit, fail-closed `identity rotate-ca`
-(see [the CA lifecycle](aivm-secrets-garrett-ca-lifecycle.md)), which has no
+(see [the CA lifecycle](../architecture/aivm-secrets-garrett-ca-lifecycle.md)), which has no
 dual-root transition. Host-state rollback detection is still missing. Only
 after it should we evaluate vTPM-backed, non-exportable keys and live VM
 attestation claims. The Rust primitive can be ported independently of libvirt,

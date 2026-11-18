@@ -124,7 +124,7 @@ trusted-users
 ```
 
 Guest accounts retain unrestricted passwordless **guest** sudo under the
-accepted [ADR-0001](adr/0001-unrestricted-agent-environment.md). Trusted
+accepted [ADR-0001](../adr/0001-unrestricted-agent-environment.md). Trusted
 host users may also have direct system-libvirt access. Guest sudo and host
 administrative authority are separate decisions. The current setup provides
 identity, ownership, predictable paths, and auditability, but not a security
@@ -135,7 +135,7 @@ A later restricted **host-user** mode may remove direct host libvirt/sudo
 access and route host mutations through an independently approved privileged
 broker. That must not remove the agent's unrestricted guest-administrator
 capability or require another storage/identity-model rewrite. The related
-[firewall lifecycle problem](firewall-lifecycle-and-delegation-2026-10.md)
+[firewall lifecycle problem](../planning/firewall-lifecycle-and-delegation-2026-10.md)
 is still an open design question.
 
 ## Target state boundaries

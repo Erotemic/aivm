@@ -13,8 +13,8 @@ local development, including **several trusted host users sharing one VM**,
 with distinct enrolled guest users, personal SSH keys and attachment owners.
 The recent non-sudo onboarding case exposed control-plane friction, not a
 failure of the successful final SSH session. See
-[shared-machine architecture](shared-machine-architecture.md) and
-[onboarding review](multi-user-onboarding-preflight-2026-10.md).
+[shared-machine architecture](../architecture/shared-machine-architecture.md) and
+[onboarding review](../audits/multi-user-onboarding-preflight-2026-10.md).
 
 Docker **Sandboxes (`sbx`)** targets coding agents in their own isolated local
 microVMs or Docker-managed cloud sandboxes [D1, D2]. NVIDIA **OpenShell** is an
@@ -165,13 +165,13 @@ Suggested decision outcomes: **keep AIVM's current scope and improve UX**;
 **add a small narrowly authorized host helper**; **investigate an OpenShell
 backend/integration**; or **change the core product direction**. None is
 approved by this survey. The candidate broker is separately documented in
-[delegated host operations](privileged-operations-broker-proposal-2026-10.md).
+[delegated host operations](../planning/privileged-operations-broker-proposal-2026-10.md).
 
 ## Sources (primary, accessed 2026-10-26)
 
 - **[A1] AIVM package and trust model:** [`pyproject.toml`](../../pyproject.toml),
-  [shared-machine architecture](shared-machine-architecture.md),
-  [secrets boundary](aivm-secrets-repository-boundary.md).
+  [shared-machine architecture](../architecture/shared-machine-architecture.md),
+  [secrets boundary](../reference/aivm-secrets-repository-boundary.md).
 - **[D1]** [Docker Sandboxes overview](https://docs.docker.com/ai/sandboxes/).
 - **[D2]** [Docker Sandboxes installation and login](https://docs.docker.com/ai/sandboxes/install/).
 - **[D3]** [Docker Sandboxes security model](https://docs.docker.com/ai/sandboxes/security/).

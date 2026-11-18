@@ -7,7 +7,7 @@ externally-managed virtiofsd.
 |---|---|
 | Added in | `cd3886f` — *"Add the rootless session runtime (qemu:///session) as a first-class mode"* |
 | Removed in | `190ed83` — *"Remove the rootless qemu:///session runtime"* |
-| Related active design | `dev/design/future/external-virtiofsd.md` |
+| Related active design | `docs/planning/external-virtiofsd.md` |
 | Never shipped | Correct. `cd3886f` landed on an unmerged pre-release branch. No released version of `aivm` ever exposed it. |
 
 ## What it was
@@ -64,7 +64,7 @@ that ongoing privilege work needs to touch.
 
 ## What would unblock it
 
-`dev/design/future/external-virtiofsd.md` (design ready, not started). Run
+`docs/planning/external-virtiofsd.md` (design ready, not started). Run
 `virtiofsd` outside libvirt as a per-share user systemd service and connect
 it to the guest with libvirt's external-socket form:
 

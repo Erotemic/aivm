@@ -5,8 +5,8 @@ three open questions: the cross-host scope, what `jti` and a retried write
 mean, and how weekly client renewal is supported. Items are marked
 **implemented** (true of the code now), **decided** (settled, implementation
 pending) or **out of scope**. Companion policies:
-[rollback and clone](aivm-secrets-garrett-rollback-clone-policy.md),
-[vTPM keys](aivm-secrets-garrett-vtpm-policy.md),
+[rollback and clone](../planning/aivm-secrets-garrett-rollback-clone-policy.md),
+[vTPM keys](../planning/aivm-secrets-garrett-vtpm-policy.md),
 [issuer API authorization](aivm-secrets-garrett-issuer-api.md).
 
 ## 1. Scope: one host, one authority per principal
@@ -20,7 +20,7 @@ bridge, broker and verb runs on the host that holds the state it uses.
 
 - durable revocation across hosts;
 - more than one trusted root at a time (single-root cutover was chosen
-  deliberately, see [CA lifecycle](aivm-secrets-garrett-ca-lifecycle.md)),
+  deliberately, see [CA lifecycle](../architecture/aivm-secrets-garrett-ca-lifecycle.md)),
   and trust between the authorities of different hosts;
 - distributed or replicated issuers, and certificate provenance across hosts;
 - replicas of the registry, keyring or vault, and budgets or quotas shared
@@ -175,7 +175,7 @@ All **implemented**:
   `identity_renew` of that VM therefore re-certifies the rotated-away key
   and installs a certificate that does not match the guest's `client.key`.
   Case 3 of the
-  [rollback and clone policy](aivm-secrets-garrett-rollback-clone-policy.md)
+  [rollback and clone policy](../planning/aivm-secrets-garrett-rollback-clone-policy.md)
   gives the decided fixes and today's workaround.
 
 ### Decision
@@ -273,7 +273,7 @@ All **implemented**:
      copy's age, and `--all` counts it as due: a VM revoked after the copy
      was taken is renewed by the next run. After any known restore, follow
      "What to do today" in the
-     [rollback and clone policy](aivm-secrets-garrett-rollback-clone-policy.md)
+     [rollback and clone policy](../planning/aivm-secrets-garrett-rollback-clone-policy.md)
      before running `--all` again.
    - `renew-server` stays operator-only and needs a bridge restart.
    - CA expiry is handled by an operator `rotate-ca` followed by re-enrolling

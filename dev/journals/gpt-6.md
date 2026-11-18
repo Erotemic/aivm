@@ -211,3 +211,26 @@ Removed an incomplete type inference of kwconf's dynamic ModalCLI.version
 attribute, and returned typed backend literals directly instead of using
 a redundant cast. Focused CLI and credential backend tests passed (32).
 mypy and ty remain to be verified in the developer environment.
+
+## 2026-11-18 13:26:25 -0500
+
+AIVM documentation move-only reorganization. Relocated twelve existing
+planning/future-design documents into a single active planning hierarchy,
+audit/reference/history categories, and preserved the original July roadmap
+index as a dated historical record. Moved document prose is retained; only
+relative Markdown destinations were retargeted. Added explicit planning,
+reference, audit, history, and dev navigation so proposals are not silently
+treated as approved architecture. Did not deduplicate EMFILE reports or
+reconcile the separate AIVM Secrets research program in this pass.
+
+I favored keeping historical evidence over tidying files aggressively.
+The potential cost is leaving some obsolete assumptions visible in dated
+records; their status is now explained by the indexes. Two references
+point to files absent from this source snapshot (released-store migration
+apply note, and a retired E2E privilege test) and have been left intact
+rather than redirected to an inaccurate substitute.
+
+The architecture documentation check passes and changed Python files
+compile. Pytest collection could not start because kwconf is not installed
+in this container. The ZIP is a plain clobbering file overlay; deletion
+of old file paths is a separate explicit git rm, not an apply script.

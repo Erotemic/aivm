@@ -709,10 +709,10 @@ Guidelines:
 Roadmap
 -------
 
-Major forward-looking efforts are designed in ``dev/design/future/``; see
-``dev/design/future/README.md`` for the index, statuses, and recommended
-sequencing (externally-managed virtiofsd, egress allowlist networking,
-snapshots/ephemeral clones, e2e in CI). A per-user ``qemu:///session``
+Major forward-looking efforts are indexed in ``docs/planning/README.md``.
+The earlier July 2026 index is preserved in
+``docs/history/2026-07-future-design-roadmap.md``; design proposals are not
+implementation approvals. A per-user ``qemu:///session``
 runtime was prototyped and removed; see
 ``docs/planning/deferred/session-runtime.md``.
 
@@ -737,7 +737,7 @@ should be evolved in these areas:
   behavior once implemented in runtime code.
 * Folder sharing backend flexibility:
   evaluate alternatives that scale beyond per-folder virtiofs device-slot
-  limits (see ``dev/design/future/flexible-folder-sharing.md``).
+  limits (see ``docs/planning/flexible-folder-sharing.md``).
 * Guest password handling:
   ``vm.password`` is plaintext in the config store and in generated cloud-init
   ``user-data``, and is therefore visible at ``--verbose 2``. Accepted while

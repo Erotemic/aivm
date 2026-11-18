@@ -2,8 +2,8 @@
 
 Status: experimental Python implementation; **no formal proof**. This work
 applies on top of AIVM commit `a557928` (2026-10-10). Refer to
-[aivm-secrets-kernel-spec.md](aivm-secrets-kernel-spec.md) and
-[aivm-secrets-assumptions.json](aivm-secrets-assumptions.json) for the
+[aivm-secrets-kernel-spec.md](../reference/aivm-secrets-kernel-spec.md) and
+[aivm-secrets-assumptions.json](../reference/aivm-secrets-assumptions.json) for the
 security contract and the trusted assumptions.
 
 ## Goals and constraints
